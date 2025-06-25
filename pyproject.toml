@@ -82,7 +82,7 @@ dependencies = [
     "ranx==0.3.20",
     "readability-lxml==0.8.1",
     "valkey==6.0.2",
-    "requests==2.32.2",
+    "requests==2.32.4",
     "replicate==0.31.0",
     "roman-numbers==1.0.2",
     "ruamel-base==1.0.0",
