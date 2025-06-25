@@ -5,31 +5,32 @@ admin:
   host: 0.0.0.0
   http_port: 9381
 mysql:
-  name: 'rag_flow'
-  user: 'root'
-  password: 'infini_rag_flow'
-  host: 'localhost'
+  name: "rag_flow"
+  user: "root"
+  password: "infini_rag_flow"
+  host: "localhost"
   port: 5455
   max_connections: 900
   stale_timeout: 300
   max_allowed_packet: 1073741824
 minio:
-  user: 'rag_flow'
-  password: 'infini_rag_flow'
-  host: 'localhost:9000'
+  user: "rag_flow"
+  password: "infini_rag_flow"
+  host: "localhost:9000"
   bucket: ''
   prefix_path: ''
 es:
-  hosts: 'http://localhost:1200'
-  username: 'elastic'
-  password: 'infini_rag_flow'
+  hosts: "http://${ES_HOST:-es01}:9200"
+  username: "${ES_USER:-elastic}"
+  password: "${ELASTIC_PASSWORD:-infini_rag_flow}"
+  api_key: "${ES_APIKEY}"
 os:
-  hosts: 'http://localhost:1201'
-  username: 'admin'
-  password: 'infini_rag_flow_OS_01'
+  hosts: "http://localhost:1201"
+  username: "admin"
+  password: "infini_rag_flow_OS_01"
 infinity:
-  uri: 'localhost:23817'
-  db_name: 'default_db'
+  uri: "localhost:23817"
+  db_name: "default_db"
 oceanbase:
   scheme: 'oceanbase' # set 'mysql' to create connection using mysql config
   config:
@@ -41,8 +42,8 @@ oceanbase:
 redis:
   db: 1
   username: ''
-  password: 'infini_rag_flow'
-  host: 'localhost:6379'
+  password: "infini_rag_flow"
+  host: "localhost:6379"
 task_executor:
   message_queue_type: 'redis'
 user_default_llm:

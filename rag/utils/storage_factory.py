@@ -13,3 +13,56 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
+import os
+from enum import Enum
+
+from rag.utils.azure_sas_conn import RAGFlowAzureSasBlob
+from rag.utils.azure_spn_conn import RAGFlowAzureSpnBlob
+from rag.utils.minio_conn import RAGFlowMinio
+from rag.utils.s3_conn import RAGFlowS3
+from rag.utils.oss_conn import RAGFlowOSS
+
+# Conditional import for opendal - only import if needed
+try:
+    from rag.utils.opendal_conn import OpenDALStorage
+
+    OPENDAL_AVAILABLE = True
+except ImportError:
+    OpenDALStorage = None
+    OPENDAL_AVAILABLE = False
+
+
+class Storage(Enum):
+    MINIO = 1
+    AZURE_SPN = 2
+    AZURE_SAS = 3
+    AWS_S3 = 4
+    OSS = 5
+    OPENDAL = 6
+
+
+class StorageFactory:
+    storage_mapping = {
+        Storage.MINIO: RAGFlowMinio,
+        Storage.AZURE_SPN: RAGFlowAzureSpnBlob,
+        Storage.AZURE_SAS: RAGFlowAzureSasBlob,
+        Storage.AWS_S3: RAGFlowS3,
+        Storage.OSS: RAGFlowOSS,
+    }
+
+    # Add OPENDAL only if available
+    if OPENDAL_AVAILABLE:
+        storage_mapping[Storage.OPENDAL] = OpenDALStorage
+
+    @classmethod
+    def create(cls, storage: Storage):
+        if storage == Storage.OPENDAL and not OPENDAL_AVAILABLE:
+            raise ImportError(
+                "OpenDAL storage requested but opendal module is not available"
+            )
+        return cls.storage_mapping[storage]()
+
+
+STORAGE_IMPL_TYPE = os.getenv("STORAGE_IMPL", "MINIO")
+STORAGE_IMPL = StorageFactory.create(Storage[STORAGE_IMPL_TYPE])
