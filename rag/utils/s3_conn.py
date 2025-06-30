@@ -19,6 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
 import time
+import mimetypes
 from io import BytesIO
 from common.decorator import singleton
 from common import settings
@@ -182,22 +183,164 @@ class RAGFlowS3:
                     logging.info(
                         f"Bucket {bucket} does not exist or not accessible via GCS: {gcs_e}"
                     )
+
+                    # Check if it's a billing/account error (403) - these are fatal for GCS
+                    if hasattr(gcs_e, "code") and gcs_e.code == 403:
+                        logging.error(f"GCS account/billing issue detected: {gcs_e}")
+                        logging.error(
+                            "Please check your Google Cloud billing account and project settings"
+                        )
+
                     return False
 
             return False
 
     def health(self):
+        """Test S3/GCS connectivity by uploading and then removing a test file"""
         bucket = self.bucket
-        fnm = "txtxtxtxt1"
-        fnm, binary = (
-            f"{self.prefix_path}/{fnm}" if self.prefix_path else fnm
-        ), b"_t@@@1"
-        if not self.bucket_exists(bucket):
-            self.conn.create_bucket(Bucket=bucket)
-            logging.debug(f"create bucket {bucket} ********")
+        test_filename = f"health_test_{int(time.time())}.txt"
+        test_content = b"health_check_test_content"
 
-        r = self.conn.upload_fileobj(BytesIO(binary), bucket, fnm)
-        return r
+        if self.prefix_path:
+            test_filename = f"{self.prefix_path}/{test_filename}"
+
+        try:
+            # Check if bucket exists, create if it doesn't
+            if not self.bucket_exists(bucket):
+                try:
+                    self.conn.create_bucket(Bucket=bucket)
+                    logging.info(f"Created bucket {bucket} during health check")
+                except Exception as bucket_create_error:
+                    logging.warning(
+                        f"Health check: S3 API bucket creation failed for {bucket}: {bucket_create_error}"
+                    )
+
+                    # Try GCS native client for bucket creation if available
+                    if self.gcs_client:
+                        try:
+                            logging.info(
+                                f"Health check: Trying GCS native client to create bucket {bucket}"
+                            )
+                            gcs_bucket = self.gcs_client.bucket(bucket)
+                            gcs_bucket.create()
+                            logging.info(
+                                f"Health check: Successfully created bucket {bucket} via GCS native client"
+                            )
+                        except Exception as gcs_bucket_error:
+                            logging.warning(
+                                f"Health check: GCS native bucket creation also failed: {gcs_bucket_error}"
+                            )
+                            # Continue anyway - bucket might already exist
+                    else:
+                        logging.warning(
+                            "Health check: No GCS native client available for bucket creation fallback"
+                        )
+
+            # Test upload
+            try:
+                self.conn.upload_fileobj(BytesIO(test_content), bucket, test_filename)
+                logging.debug(
+                    f"Health check: successfully uploaded test file {test_filename}"
+                )
+            except Exception as e:
+                logging.error(f"Health check: failed to upload test file: {e}")
+
+                # Try GCS native client as fallback
+                if self.gcs_client:
+                    try:
+                        gcs_bucket = self.gcs_client.bucket(bucket)
+                        blob = gcs_bucket.blob(test_filename)
+                        # Use upload_from_file with BytesIO for binary data
+                        blob.upload_from_file(
+                            BytesIO(test_content), content_type="text/plain"
+                        )
+                        logging.info(
+                            "Health check: successfully uploaded via GCS native client"
+                        )
+                    except Exception as gcs_e:
+                        logging.error(
+                            f"Health check: GCS native upload also failed: {gcs_e}"
+                        )
+
+                        # Check if it's a billing/account error (403) - these are fatal for GCS
+                        if hasattr(gcs_e, "code") and gcs_e.code == 403:
+                            logging.error(
+                                f"Health check: GCS account/billing issue detected: {gcs_e}"
+                            )
+                            logging.error(
+                                "Health check: Please check your Google Cloud billing account and project settings"
+                            )
+
+                        return False
+                else:
+                    return False
+
+            # Test download to verify upload worked
+            try:
+                response = self.conn.get_object(Bucket=bucket, Key=test_filename)
+                downloaded_content = response["Body"].read()
+                if downloaded_content != test_content:
+                    logging.error(
+                        "Health check: downloaded content doesn't match uploaded content"
+                    )
+                    return False
+                logging.debug(
+                    "Health check: successfully verified upload by downloading"
+                )
+            except Exception as e:
+                logging.error(f"Health check: failed to download test file: {e}")
+
+                # Try GCS native client as fallback
+                if self.gcs_client:
+                    try:
+                        gcs_bucket = self.gcs_client.bucket(bucket)
+                        blob = gcs_bucket.blob(test_filename)
+                        downloaded_content = blob.download_as_bytes()
+                        if downloaded_content != test_content:
+                            logging.error(
+                                "Health check: GCS downloaded content doesn't match"
+                            )
+                            return False
+                        logging.info(
+                            "Health check: successfully verified via GCS native client"
+                        )
+                    except Exception as gcs_e:
+                        logging.error(
+                            f"Health check: GCS native download also failed: {gcs_e}"
+                        )
+                        return False
+                else:
+                    return False
+
+            # Clean up test file
+            try:
+                self.conn.delete_object(Bucket=bucket, Key=test_filename)
+                logging.debug(f"Health check: cleaned up test file {test_filename}")
+            except Exception as e:
+                logging.warning(
+                    f"Health check: failed to clean up test file {test_filename}: {e}"
+                )
+
+                # Try GCS native client for cleanup
+                if self.gcs_client:
+                    try:
+                        gcs_bucket = self.gcs_client.bucket(bucket)
+                        blob = gcs_bucket.blob(test_filename)
+                        blob.delete()
+                        logging.info(
+                            "Health check: cleaned up test file via GCS native client"
+                        )
+                    except Exception as gcs_e:
+                        logging.warning(
+                            f"Health check: GCS native cleanup also failed: {gcs_e}"
+                        )
+
+            logging.info("Health check: passed successfully")
+            return True
+
+        except Exception as e:
+            logging.error(f"Health check: unexpected error: {e}")
+            return False
 
     def get_properties(self, bucket, key):
         return {}
@@ -209,40 +352,92 @@ class RAGFlowS3:
     @use_default_bucket
     def put(self, bucket, fnm, binary, *args, **kwargs):
         logging.debug(f"bucket name {bucket}; filename :{fnm}:")
+
+        # Determine content type based on file extension
+        content_type = self._get_content_type(fnm)
+        logging.debug(f"Determined content type for {fnm}: {content_type}")
+
+        # For GCS endpoints, prioritize native GCS client over S3-compatible API
+        is_gcs = self.endpoint_url and "storage.googleapis.com" in self.endpoint_url
+
+        if is_gcs and self.gcs_client:
+            # Try GCS native client first for GCS endpoints
+            try:
+                logging.info(f"Using GCS native client for put {bucket}/{fnm}")
+
+                # Ensure bucket exists
+                if not self.bucket_exists(bucket):
+                    try:
+                        gcs_bucket = self.gcs_client.bucket(bucket)
+                        gcs_bucket.create()
+                        logging.info(f"Created bucket {bucket} via GCS native client")
+                    except Exception as bucket_create_error:
+                        logging.warning(
+                            f"GCS bucket creation failed: {bucket_create_error}"
+                        )
+                        # Continue anyway - bucket might already exist
+
+                # Upload file using GCS native client
+                gcs_bucket = self.gcs_client.bucket(bucket)
+                blob = gcs_bucket.blob(fnm)
+                blob.upload_from_file(BytesIO(binary), content_type=content_type)
+                logging.info(
+                    f"Successfully uploaded {bucket}/{fnm} via GCS native client with content-type: {content_type}"
+                )
+                return True
+
+            except Exception as gcs_e:
+                logging.warning(f"GCS native upload failed for {bucket}/{fnm}: {gcs_e}")
+                # Fall back to S3-compatible API
+                logging.info("Falling back to S3-compatible API")
+
+        # Use S3-compatible API (either as primary for non-GCS or as fallback for GCS)
         for _ in range(1):
             try:
                 if not self.bucket_exists(bucket):
-                    self.conn.create_bucket(Bucket=bucket)
-                    logging.info(f"create bucket {bucket} ********")
-                r = self.conn.upload_fileobj(BytesIO(binary), bucket, fnm)
+                    try:
+                        self.conn.create_bucket(Bucket=bucket)
+                        logging.info(f"create bucket {bucket} ********")
+                    except Exception as bucket_create_error:
+                        logging.warning(
+                            f"S3 API bucket creation failed for {bucket}: {bucket_create_error}"
+                        )
+                        # Continue anyway - bucket might already exist
+
+                # Upload with content type
+                extra_args = {"ContentType": content_type}
+                r = self.conn.upload_fileobj(
+                    BytesIO(binary), bucket, fnm, ExtraArgs=extra_args
+                )
                 return r
+
             except Exception as e:
                 logging.exception(f"S3 API put failed for {bucket}/{fnm}: {e}")
 
-                # Try GCS native client as fallback
-                if self.gcs_client:
+                # If this is GCS and we haven't tried native client yet, try it now
+                if is_gcs and self.gcs_client:
                     try:
-                        logging.info(f"Trying GCS native client for put {bucket}/{fnm}")
+                        logging.info(
+                            f"Trying GCS native client as final fallback for put {bucket}/{fnm}"
+                        )
                         gcs_bucket = self.gcs_client.bucket(bucket)
                         blob = gcs_bucket.blob(fnm)
-                        blob.upload_from_string(binary)
+                        blob.upload_from_file(
+                            BytesIO(binary), content_type=content_type
+                        )
                         logging.info(
-                            f"Successfully uploaded {bucket}/{fnm} via GCS native client"
+                            f"Successfully uploaded {bucket}/{fnm} via GCS native client fallback with content-type: {content_type}"
                         )
                         return True
                     except Exception as gcs_e:
                         logging.exception(
-                            f"GCS native put also failed for {bucket}/{fnm}: {gcs_e}"
+                            f"GCS native fallback also failed for {bucket}/{fnm}: {gcs_e}"
                         )
-                        # Both S3 and GCS failed, raise the original S3 error
-                        self.__open__()
-                        time.sleep(1)
-                        raise e
-                else:
-                    # No GCS fallback available, raise the original S3 error
-                    self.__open__()
-                    time.sleep(1)
-                    raise e
+
+                # Both methods failed, raise the original error
+                self.__open__()
+                time.sleep(1)
+                raise e
 
     @use_prefix_path
     @use_default_bucket
@@ -338,6 +533,19 @@ class RAGFlowS3:
     @use_prefix_path
     @use_default_bucket
     def get_presigned_url(self, bucket, fnm, expires, *args, **kwargs):
+        # For GCS endpoints, prioritize native GCS signed URLs with impersonation
+        is_gcs = self.endpoint_url and "storage.googleapis.com" in self.endpoint_url
+
+        if is_gcs and self.gcs_client:
+            try:
+                return self._generate_gcs_signed_url(bucket, fnm, expires, method="GET")
+            except Exception as gcs_e:
+                logging.warning(
+                    f"GCS signed URL generation failed for {bucket}/{fnm}: {gcs_e}"
+                )
+                # Fall back to S3-compatible API
+
+        # Use S3-compatible API for non-GCS or as fallback
         for _ in range(10):
             try:
                 r = self.conn.generate_presigned_url(
@@ -362,3 +570,149 @@ class RAGFlowS3:
             self.conn.delete_bucket(Bucket=bucket)
         except Exception as e:
             logging.error(f"Fail rm {bucket}: " + str(e))
+
+    def _get_content_type(self, filename):
+        """Determine content type based on file extension"""
+        content_type, _ = mimetypes.guess_type(filename)
+        if content_type is None:
+            # Default to binary if we can't determine the type
+            content_type = "application/octet-stream"
+        return content_type
+
+    @use_prefix_path
+    @use_default_bucket
+    def get_presigned_upload_url(self, bucket, fnm, expires, content_type=None):
+        """Generate a presigned URL for uploading files"""
+        # Determine content type if not provided
+        if content_type is None:
+            content_type = self._get_content_type(fnm)
+
+        # For GCS endpoints, use native GCS signed URLs with impersonation
+        is_gcs = self.endpoint_url and "storage.googleapis.com" in self.endpoint_url
+
+        if is_gcs and self.gcs_client:
+            try:
+                return self._generate_gcs_signed_url(
+                    bucket, fnm, expires, method="PUT", content_type=content_type
+                )
+            except Exception as gcs_e:
+                logging.warning(
+                    f"GCS upload signed URL generation failed for {bucket}/{fnm}: {gcs_e}"
+                )
+                # Fall back to S3-compatible API
+
+        # Use S3-compatible API for non-GCS or as fallback
+        try:
+            conditions = []
+            if content_type:
+                conditions.append({"Content-Type": content_type})
+
+            r = self.conn.generate_presigned_url(
+                "put_object",
+                Params={"Bucket": bucket, "Key": fnm, "ContentType": content_type},
+                ExpiresIn=expires,
+            )
+            return r
+        except Exception as e:
+            logging.exception(
+                f"Failed to generate S3 upload URL for {bucket}/{fnm}: {e}"
+            )
+            return None
+
+    def _generate_gcs_signed_url(
+        self, bucket, object_name, expires, method="GET", content_type=None
+    ):
+        """Generate a signed URL for GCS using service account impersonation for toteqa project"""
+        try:
+            from google.auth import impersonated_credentials
+            from google.auth import default
+            from google.cloud import storage
+            import datetime
+
+            # Get default credentials first
+            source_credentials, _ = default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+
+            # Service account to impersonate for toteqa project
+            target_service_account = "ragflow-storage@toteqa.iam.gserviceaccount.com"
+
+            # Create impersonated credentials
+            target_credentials = impersonated_credentials.Credentials(
+                source_credentials=source_credentials,
+                target_principal=target_service_account,
+                target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                lifetime=3600,
+            )
+
+            # Create storage client with impersonated credentials
+            storage_client = storage.Client(
+                credentials=target_credentials, project="toteqa"
+            )
+
+            # Get the bucket and blob
+            gcs_bucket = storage_client.bucket(bucket)
+            blob = gcs_bucket.blob(object_name)
+
+            # Set content type if provided (for uploads)
+            if content_type and method == "PUT":
+                blob.content_type = content_type
+
+            # Generate the signed URL
+            expiration = datetime.datetime.utcnow() + datetime.timedelta(
+                seconds=expires
+            )
+
+            signed_url = blob.generate_signed_url(
+                version="v4",
+                expiration=expiration,
+                method=method,
+                content_type=content_type if method == "PUT" else None,
+                credentials=target_credentials,
+            )
+
+            logging.info(
+                f"Generated GCS signed URL for {method} {bucket}/{object_name} with impersonation"
+            )
+            return signed_url
+
+        except Exception as e:
+            logging.exception(
+                f"Failed to generate GCS signed URL with impersonation: {e}"
+            )
+            raise e
+
+    def get_upload_strategy(self, bucket, fnm, expires=3600):
+        """
+        Get the best upload strategy for the given file.
+        Returns either a signed URL for direct upload or None if server-side upload should be used.
+        """
+        is_gcs = self.endpoint_url and "storage.googleapis.com" in self.endpoint_url
+
+        if is_gcs and self.gcs_client:
+            try:
+                # For GCS, prefer signed URL uploads to avoid authentication issues
+                content_type = self._get_content_type(fnm)
+                signed_url = self.get_presigned_upload_url(
+                    bucket, fnm, expires, content_type
+                )
+
+                if signed_url:
+                    return {
+                        "method": "signed_url",
+                        "url": signed_url,
+                        "content_type": content_type,
+                        "expires": expires,
+                    }
+            except Exception as e:
+                logging.warning(
+                    f"Failed to generate signed URL for {bucket}/{fnm}: {e}"
+                )
+
+        # Fall back to server-side upload
+        return {
+            "method": "server_upload",
+            "url": None,
+            "content_type": self._get_content_type(fnm),
+            "expires": None,
+        }
