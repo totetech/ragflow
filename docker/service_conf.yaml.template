@@ -24,6 +24,7 @@ es:
   username: '${ES_USER:-elastic}'
   password: '${ELASTIC_PASSWORD:-infini_rag_flow}'
   api_key: '${ES_APIKEY}'
+  verify_certs: ${ES_VERIFY_CERTS:-true}
 os:
   hosts: 'http://${OS_HOST:-opensearch01}:9201'
   username: '${OS_USER:-admin}'

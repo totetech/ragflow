@@ -24,6 +24,7 @@ es:
   username: "${ES_USER:-elastic}"
   password: "${ELASTIC_PASSWORD:-infini_rag_flow}"
   api_key: "${ES_APIKEY}"
+  verify_certs: true
 os:
   hosts: "http://localhost:1201"
   username: "admin"
