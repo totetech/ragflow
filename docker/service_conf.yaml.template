@@ -26,9 +26,11 @@ minio:
   # optional: set to false to allow self-signed certificates (e.g. in development).
   # verify: ${MINIO_VERIFY:-true}
 es:
-  hosts: 'http://${ES_HOST:-es01}:9200'
+  hosts: '${ES_HOST:-http://es01:9200}'
   username: '${ES_USER:-elastic}'
   password: '${ELASTIC_PASSWORD:-infini_rag_flow}'
+  api_key: '${ES_APIKEY}'
+  verify_certs: ${ES_VERIFY_CERTS:-true}
 os:
   hosts: 'http://${OS_HOST:-opensearch01}:9201'
   username: '${OS_USER:-admin}'
@@ -142,10 +144,9 @@ user_default_llm:
 #   tenant_id: 'tenant_id'
 #   container_name: 'container_name'
 #   cloud: 'public'  # Azure cloud: 'public', 'china', 'government', or 'germany'
-# gcs:
-#   bucket: '${GCS_BUCKET:-ragflow}'
-#   prefix_path: '${GCS_PREFIX_PATH:-}'
-#   endpoint_url: '${GCS_ENDPOINT:-}'
+gcs:
+  bucket: '${STORAGE_BUCKET:-ragflow}'
+  prefix_path: '${STORAGE_PREFIX_PATH}'
 # The OSS object storage uses the MySQL configuration above by default. If you need to switch to another object storage service, please uncomment and configure the following parameters.
 # opendal:
 #   scheme: 'mysql'  # Storage type, such as s3, oss, azure, etc.
@@ -167,15 +168,16 @@ user_default_llm:
 #     asr_model:
 #       model: 'whisper-large-v3' # alias of name
 #     image2text_model: ''
-# oauth:
-#   oauth2:
-#     display_name: "OAuth2"
-#     client_id: "your_client_id"
-#     client_secret: "your_client_secret"
-#     authorization_url: "https://your-oauth-provider.com/oauth/authorize"
-#     token_url: "https://your-oauth-provider.com/oauth/token"
-#     userinfo_url: "https://your-oauth-provider.com/oauth/userinfo"
-#     redirect_uri: "https://your-app.com/api/v1/auth/oauth/oauth2/callback"
+oauth:
+  oauth2:
+    display_name: "${OAUTH2_DISPLAY_NAME:-Okta}"
+    client_id: "${OAUTH2_CLIENT_ID}"
+    client_secret: "${OAUTH2_CLIENT_SECRET}"
+    authorization_url: "${OAUTH2_AUTHORIZATION_URL}"
+    token_url: "${OAUTH2_TOKEN_URL}"
+    userinfo_url: "${OAUTH2_USERINFO_URL}"
+    scope: "${OAUTH2_SCOPE:-openid email profile}"
+    redirect_uri: "${OAUTH2_REDIRECT_URI}"
 #   oidc:
 #     display_name: "OIDC"
 #     client_id: "your_client_id"
