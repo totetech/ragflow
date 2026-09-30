@@ -28,6 +28,7 @@ class RAGFlowGCS:
     def __init__(self):
         self.client = None
         self.bucket_name = None
+        self.prefix_path = ""
         self.__open__()
 
     def __open__(self):
@@ -40,14 +41,14 @@ class RAGFlowGCS:
         try:
             self.client = storage.Client()
             self.bucket_name = settings.GCS["bucket"]
+            self.prefix_path = (settings.GCS.get("prefix_path") or "").strip("/")
         except Exception:
             logging.exception("Fail to connect to GCS")
 
     def _get_blob_path(self, folder, filename):
-        """Helper to construct the path: folder/filename"""
-        if not folder:
-            return filename
-        return f"{folder}/{filename}"
+        """Helper to construct the path: [prefix_path/]folder/filename"""
+        path = f"{folder}/{filename}" if folder else filename
+        return f"{self.prefix_path}/{path}" if self.prefix_path else path
 
     def health(self):
         folder, fnm, binary = "ragflow-health", "health_check", b"_t@@@1"
@@ -157,7 +158,7 @@ class RAGFlowGCS:
         # RENAMED PARAMETER: bucket_name -> bucket
         try:
             bucket_obj = self.client.bucket(self.bucket_name)
-            prefix = f"{bucket}/"
+            prefix = self._get_blob_path(bucket, "")
 
             blobs = list(self.client.list_blobs(self.bucket_name, prefix=prefix))
 
