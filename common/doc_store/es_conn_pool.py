@@ -69,9 +69,11 @@ class ElasticSearchConnectionPool:
             raise Exception(msg)
 
     def _connect(self):
+        api_key = self.ES_CONFIG.get("api_key")
         self.es_conn = Elasticsearch(
             self.ES_CONFIG["hosts"].split(","),
-            basic_auth=(self.ES_CONFIG["username"], self.ES_CONFIG["password"]) if "username" in self.ES_CONFIG and "password" in self.ES_CONFIG else None,
+            api_key=api_key or None,
+            basic_auth=None if api_key else (self.ES_CONFIG["username"], self.ES_CONFIG["password"]) if "username" in self.ES_CONFIG and "password" in self.ES_CONFIG else None,
             verify_certs=self.ES_CONFIG.get("verify_certs", False),
             timeout=600,
         )
