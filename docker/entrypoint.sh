@@ -278,12 +278,9 @@ run_with_restart() {
   done
 }
 
-# Initialize the database schema before any of the services below start.
-# This used to run inside the web server block only, so hosts that ran e.g.
-# just the admin server, data sync, MCP server, or task executors never
-# initialized the schema.
-ensure_db_init
-
+# Model provider migrations must run before ensure_db_init: init_database_tables
+# creates an empty tenant_model with the final INT model_type, which makes the
+# migration treat the merge as already done and skip seeding tenant_model.
 if [[ "${INIT_MODEL_PROVIDER_TABLES}" -eq 1 ]]; then
     DB_TYPE_NORMALIZED="${DB_TYPE:-mysql}"
     DB_TYPE_NORMALIZED="${DB_TYPE_NORMALIZED,,}"
@@ -295,6 +292,12 @@ if [[ "${INIT_MODEL_PROVIDER_TABLES}" -eq 1 ]]; then
         tools/scripts/run_migrations.sh
     fi
 fi
+
+# Initialize the database schema before any of the services below start.
+# This used to run inside the web server block only, so hosts that ran e.g.
+# just the admin server, data sync, MCP server, or task executors never
+# initialized the schema.
+ensure_db_init
 
 if [[ "${ENABLE_ADMIN_SERVER}" -eq 1 ]]; then
 
